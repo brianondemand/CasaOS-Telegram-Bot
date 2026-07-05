@@ -1,0 +1,21 @@
+[Unit]
+Description=CasaOS Telegram Management Bot
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Change these two to match your setup:
+User=YOUR_LINUX_USERNAME
+WorkingDirectory=/home/YOUR_LINUX_USERNAME/casaos-bot
+
+# Fill in your real values here (or use an EnvironmentFile= instead, see README)
+Environment=BOT_TOKEN=PUT_YOUR_BOT_TOKEN_HERE
+Environment=AUTHORIZED_USERS=PUT_YOUR_TELEGRAM_USER_ID_HERE
+
+ExecStart=/usr/bin/python3 /home/YOUR_LINUX_USERNAME/casaos-bot/bot.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

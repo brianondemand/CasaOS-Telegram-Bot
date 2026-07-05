@@ -1,0 +1,22 @@
+services:
+  casaos-bot:
+    build: .
+    container_name: casaos-bot
+    restart: unless-stopped
+
+    # Needed so the bot can control other Docker containers (CasaOS apps)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    # Needed so `nsenter` can reach the host's PID 1 for reboot/shutdown/apt.
+    # This effectively gives the container root-equivalent power over the
+    # host - only run this if you're comfortable with that tradeoff, and
+    # keep AUTHORIZED_USERS tight (see README.md "Security notes").
+    privileged: true
+    pid: host
+
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - AUTHORIZED_USERS=${AUTHORIZED_USERS}
+      - LOG_TAIL_LINES=${LOG_TAIL_LINES:-30}
+      - USE_NSENTER=true

@@ -467,6 +467,29 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------------------------------------------------------------------------
+# Command menu (the "/" button list shown in the Telegram chat box)
+# ---------------------------------------------------------------------------
+BOT_COMMANDS = [
+    ("start", "Show welcome message"),
+    ("help", "Show all commands"),
+    ("status", "CPU, RAM, disk, temperature, uptime"),
+    ("diskusage", "Disk usage per mounted volume"),
+    ("processes", "Top processes by CPU and memory"),
+    ("network", "IP addresses and bandwidth"),
+    ("containers", "List Docker containers with controls"),
+    ("logs", "Show recent logs for a container"),
+    ("update", "Run apt update and upgrade"),
+    ("reboot", "Reboot the server"),
+    ("shutdown", "Shut down the server"),
+]
+
+
+async def _post_init(application: Application):
+    await application.bot.set_my_commands(BOT_COMMANDS)
+    logger.info("Command menu registered with Telegram.")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
@@ -475,7 +498,7 @@ def main():
             "Please set BOT_TOKEN in config.py or the BOT_TOKEN environment variable."
         )
 
-    application = Application.builder().token(config.BOT_TOKEN).build()
+    application = Application.builder().token(config.BOT_TOKEN).post_init(_post_init).build()
 
     application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(CommandHandler("help", help_cmd))

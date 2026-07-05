@@ -1,6 +1,6 @@
 # CasaOS Telegram Bot
 
-A Telegram bot for monitoring and managing a CasaOS server running on Ubuntu 24.04 LTS.
+A Telegram bot for monitoring and managing a CasaOS server.
 
 ## Features
 

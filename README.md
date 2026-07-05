@@ -1,21 +1,21 @@
 # CasaOS Telegram Bot
 
-A Telegram bot for monitoring and managing a CasaOS server running on Ubuntu 24.04 LTS.
+A Telegram bot for monitoring and managing a CasaOS server.
 
 ## Features
 
-| Command | Description |
-|---|---|
-| `/start`, `/help` | Show welcome message / command list |
-| `/status` | CPU, RAM, disk, temperature, load average, uptime |
-| `/diskusage` | Disk usage per mounted volume |
-| `/processes` | Top 5 processes by CPU and by memory |
-| `/network` | Local + public IP, bandwidth counters |
-| `/containers` | List all Docker containers (CasaOS apps) with inline Start/Stop/Restart/Logs buttons |
-| `/logs <name>` | Show recent logs for a container |
-| `/update` | Run `apt-get update && apt-get upgrade -y` (with confirmation) |
-| `/reboot` | Reboot the server (with confirmation) |
-| `/shutdown` | Shut down the server (with confirmation) |
+| Command           | Description                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------ |
+| `/start`, `/help` | Show welcome message / command list                                                  |
+| `/status`         | CPU, RAM, disk, temperature, load average, uptime                                    |
+| `/diskusage`      | Disk usage per mounted volume                                                        |
+| `/processes`      | Top 5 processes by CPU and by memory                                                 |
+| `/network`        | Local + public IP, bandwidth counters                                                |
+| `/containers`     | List all Docker containers (CasaOS apps) with inline Start/Stop/Restart/Logs buttons |
+| `/logs <name>`    | Show recent logs for a container                                                     |
+| `/update`         | Run `apt-get update && apt-get upgrade -y` (with confirmation)                       |
+| `/reboot`         | Reboot the server (with confirmation)                                                |
+| `/shutdown`       | Shut down the server (with confirmation)                                             |
 
 Only Telegram user IDs you explicitly whitelist can use the bot — everyone else gets a "not authorized" reply.
 
@@ -70,7 +70,7 @@ Add (replace `youruser` with your actual username):
 youruser ALL=(ALL) NOPASSWD: /sbin/reboot, /sbin/shutdown, /usr/bin/apt-get update, /usr/bin/apt-get upgrade -y
 ```
 
-Save and exit. This lets the bot run *only* those exact commands without a password — nothing else.
+Save and exit. This lets the bot run _only_ those exact commands without a password — nothing else.
 
 ## 7. Configure the bot
 
@@ -89,6 +89,7 @@ Message your bot on Telegram — try `/start`.
 ## 8. Run it permanently as a systemd service
 
 Edit `casaos-bot.service`:
+
 - Replace `YOUR_LINUX_USERNAME` with your actual username (appears 3 times).
 - Replace `PUT_YOUR_BOT_TOKEN_HERE` and `PUT_YOUR_TELEGRAM_USER_ID_HERE` with your real values.
 - If you used a venv, change `ExecStart=` to point at `venv/bin/python3` instead of `/usr/bin/python3`.
@@ -118,6 +119,7 @@ journalctl -u casaos-bot -f
 ## Extending it further
 
 Ideas if you want to go further later:
+
 - Direct CasaOS API integration (app store install/uninstall) via CasaOS's own REST API and a stored session token.
 - Scheduled daily `/status` reports using `JobQueue` (built into `python-telegram-bot`).
 - Alerting when CPU/RAM/disk crosses a threshold (a background job checking `psutil` and messaging you proactively).

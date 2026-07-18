@@ -15,8 +15,26 @@ services:
     privileged: true
     pid: host
 
+    # Lets the container resolve "host.docker.internal" to the actual host
+    # machine on Linux (this mapping is automatic on Docker Desktop for
+    # Mac/Windows, but must be set explicitly on Linux). Needed to reach
+    # Ollama running on the CasaOS host itself.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
       - AUTHORIZED_USERS=${AUTHORIZED_USERS}
       - LOG_TAIL_LINES=${LOG_TAIL_LINES:-30}
       - USE_NSENTER=true
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-qwen2.5:3b}
+      - OLLAMA_TIMEOUT_SECONDS=${OLLAMA_TIMEOUT_SECONDS:-60}
+      - MONITOR_ENABLED=${MONITOR_ENABLED:-true}
+      - MONITOR_INTERVAL_SECONDS=${MONITOR_INTERVAL_SECONDS:-300}
+      - CPU_ALERT_THRESHOLD=${CPU_ALERT_THRESHOLD:-90}
+      - MEM_ALERT_THRESHOLD=${MEM_ALERT_THRESHOLD:-90}
+      - DISK_ALERT_THRESHOLD=${DISK_ALERT_THRESHOLD:-90}
+      - TEMP_ALERT_THRESHOLD_C=${TEMP_ALERT_THRESHOLD_C:-80}
+      - BATTERY_ALERT_THRESHOLD=${BATTERY_ALERT_THRESHOLD:-20}
+      - ALERT_COOLDOWN_SECONDS=${ALERT_COOLDOWN_SECONDS:-1800}

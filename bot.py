@@ -1,9 +1,9 @@
 """
-CasaOS Telegram Management Bot
-================================
+Captain Ryusuui - CasaOS Telegram Management Bot
+==================================================
 A Telegram bot to monitor and manage a CasaOS server (Ubuntu 24.04 LTS):
   - System stats (CPU, RAM, disk, temperature, uptime, load average)
-  - Docker container management (list/start/stop/restart/logs) - covers
+  - Docker container management (list/start/stop/restart) - covers
     CasaOS apps since they run as Docker containers
   - Power control (reboot / shutdown) with confirmation
   - Network info (local + public IP, bandwidth counters)
@@ -19,15 +19,17 @@ Run:
 import logging
 import subprocess
 import socket
+import time as time_module
 from datetime import timedelta
 from functools import wraps
 
 import psutil
 import docker
+import requests
 from docker.errors import DockerException, NotFound
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ParseMode
+from telegram.constants import ParseMode, ChatAction
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -43,6 +45,15 @@ logging.basicConfig(
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("casaos-bot")
+
+# Per-chat selected Ollama model (in-memory; resets on bot restart)
+_chat_model_choice = {}
+
+# Tracks last container status per container ID, for the watchdog job
+_last_container_status = {}
+
+# Tracks last alert timestamp per metric, to enforce cooldowns
+_last_alert_time = {}
 
 # ---------------------------------------------------------------------------
 # Docker client (lazy-safe: server still runs status/power commands even if
@@ -111,6 +122,17 @@ def get_local_ip() -> str:
         return "unknown"
 
 
+def get_battery_info():
+    """Returns (percent, plugged_in) or None if no battery is present/exposed."""
+    try:
+        battery = psutil.sensors_battery()
+        if battery is None:
+            return None
+        return round(battery.percent, 1), battery.power_plugged
+    except (AttributeError, NotImplementedError):
+        return None
+
+
 def run_shell(cmd: list, timeout: int = 60) -> str:
     """Run a command and return combined stdout/stderr, capped in length."""
     try:
@@ -133,8 +155,8 @@ def run_shell(cmd: list, timeout: int = 60) -> str:
 @restricted
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "👋 *CasaOS Server Bot*\n\n"
-        "I can help you monitor and manage your server.\n"
+        "👋 *Captain Ryusuui*, reporting for duty.\n\n"
+        "I'll keep watch over your server, run diagnostics, and carry out orders on request.\n"
         "Use /help to see everything I can do."
     )
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
@@ -150,8 +172,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/network - IP addresses & bandwidth counters\n"
         "/diskusage - Disk usage per mounted volume\n\n"
         "🐳 *Docker / CasaOS apps*\n"
-        "/containers - List containers with action buttons\n"
-        "/logs <name> - Show recent logs for a container\n\n"
+        "/containers - List containers with action buttons\n\n"
+        "🧠 *Local AI (Ollama)*\n"
+        "/ask <question> - Ask your local model a question\n"
+        "/model - Switch which model /ask uses\n\n"
         "🔧 *Maintenance*\n"
         "/update - Run apt update && apt upgrade\n"
         "/reboot - Reboot the server (confirmation required)\n"
@@ -185,11 +209,23 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (AttributeError, NotImplementedError):
         pass
 
+    battery_str = None
+    battery_info = get_battery_info()
+    if battery_info is not None:
+        pct, plugged = battery_info
+        plug_emoji = "🔌" if plugged else "🔋"
+        battery_str = f"{plug_emoji} {pct}% ({'charging/plugged in' if plugged else 'on battery'})"
+
     text = (
         "🖥️ *System Status*\n\n"
         f"*CPU:* {cpu_percent}% across {cpu_count} cores\n"
         f"*Load avg:* {load1:.2f}, {load5:.2f}, {load15:.2f} (1/5/15 min)\n"
-        f"*Temperature:* {temp_str}\n\n"
+        f"*Temperature:* {temp_str}\n"
+    )
+    if battery_str:
+        text += f"*Battery:* {battery_str}\n"
+    text += (
+        "\n"
         f"*RAM:* {human_bytes(mem.used)} / {human_bytes(mem.total)} ({mem.percent}%)\n"
         f"*Swap:* {human_bytes(swap.used)} / {human_bytes(swap.total)} ({swap.percent}%)\n\n"
         f"*Disk (/):* {human_bytes(disk.used)} / {human_bytes(disk.total)} ({disk.percent}%)\n\n"
@@ -271,7 +307,6 @@ def _container_keyboard(container) -> InlineKeyboardMarkup:
         buttons.append(InlineKeyboardButton("🔄 Restart", callback_data=f"restart:{cid}"))
     else:
         buttons.append(InlineKeyboardButton("▶️ Start", callback_data=f"start:{cid}"))
-    buttons.append(InlineKeyboardButton("📜 Logs", callback_data=f"logs:{cid}"))
     return InlineKeyboardMarkup([buttons])
 
 
@@ -297,33 +332,6 @@ async def containers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             text, parse_mode=ParseMode.MARKDOWN, reply_markup=_container_keyboard(c)
         )
-
-
-@restricted
-async def logs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if docker_client is None:
-        await update.message.reply_text("❌ Cannot reach the Docker daemon.")
-        return
-    if not context.args:
-        await update.message.reply_text("Usage: /logs <container_name_or_id>")
-        return
-
-    name = context.args[0]
-    try:
-        c = docker_client.containers.get(name)
-    except NotFound:
-        await update.message.reply_text(f"❌ Container '{name}' not found.")
-        return
-
-    raw = c.logs(tail=config.LOG_TAIL_LINES).decode(errors="replace")
-    if not raw.strip():
-        raw = "(no log output)"
-    # Telegram message limit is 4096 chars
-    snippet = raw[-3500:]
-    await update.message.reply_text(
-        f"📜 *Last {config.LOG_TAIL_LINES} lines - {c.name}*\n```\n{snippet}\n```",
-        parse_mode=ParseMode.MARKDOWN,
-    )
 
 
 async def container_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -356,15 +364,6 @@ async def container_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         elif action == "restart":
             c.restart()
             msg = f"🔄 Restarted *{c.name}*"
-        elif action == "logs":
-            raw = c.logs(tail=config.LOG_TAIL_LINES).decode(errors="replace")
-            snippet = (raw.strip() or "(no log output)")[-3500:]
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text=f"📜 *Last {config.LOG_TAIL_LINES} lines - {c.name}*\n```\n{snippet}\n```",
-                parse_mode=ParseMode.MARKDOWN,
-            )
-            return
         else:
             msg = "Unknown action."
     except DockerException as e:
@@ -377,6 +376,84 @@ async def container_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.edit_message_text(
         text, parse_mode=ParseMode.MARKDOWN, reply_markup=_container_keyboard(c)
     )
+
+
+# ---------------------------------------------------------------------------
+# Ollama (local LLM) integration
+# ---------------------------------------------------------------------------
+def _get_chat_model(chat_id: int) -> str:
+    return _chat_model_choice.get(chat_id, config.DEFAULT_MODEL)
+
+
+def _ollama_generate(model: str, prompt: str) -> str:
+    """Blocking call to the local Ollama API. Run via asyncio.to_thread."""
+    try:
+        resp = requests.post(
+            f"{config.OLLAMA_HOST}/api/generate",
+            json={"model": model, "prompt": prompt, "stream": False},
+            timeout=config.OLLAMA_TIMEOUT_SECONDS,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("response", "(empty response)").strip()
+    except requests.exceptions.ConnectionError:
+        return (
+            f"❌ Can't reach Ollama at {config.OLLAMA_HOST}. Is Ollama running, "
+            "and is OLLAMA_HOST set correctly for your setup (Docker vs host)?"
+        )
+    except requests.exceptions.Timeout:
+        return f"⏱️ Model took longer than {config.OLLAMA_TIMEOUT_SECONDS}s to respond. Try a smaller model with /model."
+    except Exception as e:
+        return f"❌ Ollama error: {e}"
+
+
+@restricted
+async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Usage: /ask <your question>")
+        return
+
+    prompt = " ".join(context.args)
+    model = _get_chat_model(update.effective_chat.id)
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    thinking_msg = await update.message.reply_text(f"🤔 Asking *{model}*...", parse_mode=ParseMode.MARKDOWN)
+
+    import asyncio
+    answer = await asyncio.to_thread(_ollama_generate, model, prompt)
+
+    # Telegram message limit is 4096 chars
+    if len(answer) > 3900:
+        answer = answer[:3900] + "\n\n...(truncated)"
+
+    await thinking_msg.edit_text(f"🤖 *{model}*:\n\n{answer}", parse_mode=ParseMode.MARKDOWN)
+
+
+@restricted
+async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    current = _get_chat_model(update.effective_chat.id)
+    buttons = []
+    for m in config.AVAILABLE_MODELS:
+        label = f"✅ {m}" if m == current else m
+        buttons.append([InlineKeyboardButton(label, callback_data=f"setmodel:{m}")])
+    await update.message.reply_text(
+        f"Current model: *{current}*\n\nChoose a model for /ask:",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def setmodel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id if query.from_user else None
+    if user_id not in config.AUTHORIZED_USERS:
+        await query.answer("🚫 Not authorized.", show_alert=True)
+        return
+
+    _, model = query.data.split(":", 1)
+    _chat_model_choice[query.message.chat_id] = model
+    await query.answer(f"Switched to {model}")
+    await query.edit_message_text(f"✅ Now using *{model}* for /ask", parse_mode=ParseMode.MARKDOWN)
 
 
 # ---------------------------------------------------------------------------
@@ -460,6 +537,89 @@ async def confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------------------------------------------------------------------------
+# Proactive monitoring (background job, no user interaction needed)
+# ---------------------------------------------------------------------------
+def _should_alert(key: str) -> bool:
+    """Cooldown check so we don't spam the same alert every interval."""
+    last = _last_alert_time.get(key, 0)
+    now = time_module.time()
+    if now - last >= config.ALERT_COOLDOWN_SECONDS:
+        _last_alert_time[key] = now
+        return True
+    return False
+
+
+async def _broadcast(context: ContextTypes.DEFAULT_TYPE, text: str):
+    for uid in config.AUTHORIZED_USERS:
+        try:
+            await context.bot.send_message(chat_id=uid, text=text, parse_mode=ParseMode.MARKDOWN)
+        except Exception as e:
+            logger.warning("Could not send alert to %s: %s", uid, e)
+
+
+async def monitor_job(context: ContextTypes.DEFAULT_TYPE):
+    # --- Resource thresholds ---
+    cpu = psutil.cpu_percent(interval=1)
+    mem = psutil.virtual_memory().percent
+    disk = psutil.disk_usage("/").percent
+
+    if cpu >= config.CPU_ALERT_THRESHOLD and _should_alert("cpu"):
+        await _broadcast(context, f"⚠️ *High CPU usage:* {cpu}% (threshold {config.CPU_ALERT_THRESHOLD}%)")
+
+    if mem >= config.MEM_ALERT_THRESHOLD and _should_alert("mem"):
+        await _broadcast(context, f"⚠️ *High memory usage:* {mem}% (threshold {config.MEM_ALERT_THRESHOLD}%)")
+
+    if disk >= config.DISK_ALERT_THRESHOLD and _should_alert("disk"):
+        await _broadcast(context, f"⚠️ *High disk usage on /:* {disk}% (threshold {config.DISK_ALERT_THRESHOLD}%)")
+
+    try:
+        temps = psutil.sensors_temperatures()
+        if temps:
+            for key in ("coretemp", "cpu_thermal", "k10temp"):
+                if key in temps and temps[key]:
+                    current = temps[key][0].current
+                    if current >= config.TEMP_ALERT_THRESHOLD_C and _should_alert("temp"):
+                        await _broadcast(
+                            context,
+                            f"🌡️ *High temperature:* {current:.1f}°C (threshold {config.TEMP_ALERT_THRESHOLD_C}°C)",
+                        )
+                    break
+    except (AttributeError, NotImplementedError):
+        pass
+
+    # --- Battery: alert when low AND not currently charging ---
+    battery_info = get_battery_info()
+    if battery_info is not None:
+        pct, plugged = battery_info
+        if pct <= config.BATTERY_ALERT_THRESHOLD and not plugged and _should_alert("battery"):
+            await _broadcast(
+                context,
+                f"🔋 *Low battery:* {pct}% remaining and not charging - "
+                f"connect the charger (threshold {config.BATTERY_ALERT_THRESHOLD}%)",
+            )
+        elif plugged:
+            # Reset the cooldown once it's charging again, so the next time
+            # it drops low you get a fresh alert instead of staying silent.
+            _last_alert_time.pop("battery", None)
+
+    # --- Container watchdog: alert on unexpected stop / restart loop ---
+    if docker_client is not None:
+        try:
+            containers = docker_client.containers.list(all=True)
+            for c in containers:
+                prev = _last_container_status.get(c.id)
+                if prev == "running" and c.status != "running":
+                    if _should_alert(f"container:{c.id}"):
+                        await _broadcast(
+                            context,
+                            f"🔴 *Container stopped unexpectedly:* {c.name} (status: {c.status})",
+                        )
+                _last_container_status[c.id] = c.status
+        except DockerException as e:
+            logger.warning("Monitor job could not list containers: %s", e)
+
+
+# ---------------------------------------------------------------------------
 # Error handler
 # ---------------------------------------------------------------------------
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -477,7 +637,8 @@ BOT_COMMANDS = [
     ("processes", "Top processes by CPU and memory"),
     ("network", "IP addresses and bandwidth"),
     ("containers", "List Docker containers with controls"),
-    ("logs", "Show recent logs for a container"),
+    ("ask", "Ask your local Ollama model a question"),
+    ("model", "Switch which Ollama model /ask uses"),
     ("update", "Run apt update and upgrade"),
     ("reboot", "Reboot the server"),
     ("shutdown", "Shut down the server"),
@@ -508,8 +669,11 @@ def main():
     application.add_handler(CommandHandler("network", network_cmd))
 
     application.add_handler(CommandHandler("containers", containers_cmd))
-    application.add_handler(CommandHandler("logs", logs_cmd))
-    application.add_handler(CallbackQueryHandler(container_callback, pattern="^(start|stop|restart|logs):"))
+    application.add_handler(CallbackQueryHandler(container_callback, pattern="^(start|stop|restart):"))
+
+    application.add_handler(CommandHandler("ask", ask_cmd))
+    application.add_handler(CommandHandler("model", model_cmd))
+    application.add_handler(CallbackQueryHandler(setmodel_callback, pattern="^setmodel:"))
 
     application.add_handler(CommandHandler("reboot", reboot_cmd))
     application.add_handler(CommandHandler("shutdown", shutdown_cmd))
@@ -517,6 +681,17 @@ def main():
     application.add_handler(CallbackQueryHandler(confirm_callback, pattern="^confirm:"))
 
     application.add_error_handler(error_handler)
+
+    if config.MONITOR_ENABLED:
+        if config.AUTHORIZED_USERS:
+            application.job_queue.run_repeating(
+                monitor_job, interval=config.MONITOR_INTERVAL_SECONDS, first=30
+            )
+            logger.info(
+                "Proactive monitoring enabled (every %ss).", config.MONITOR_INTERVAL_SECONDS
+            )
+        else:
+            logger.warning("MONITOR_ENABLED is true but AUTHORIZED_USERS is empty - skipping monitor job.")
 
     logger.info("Bot starting (polling mode)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)

@@ -1,5 +1,5 @@
 """
-Configuration for the CasaOS Telegram Bot.
+Configuration for the Captain Ryusuui - CasaOS Telegram Bot.
 
 Set these via environment variables (recommended, see .env.example / the
 systemd unit file), or just hardcode them here for a quick test.
@@ -59,11 +59,16 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://host.docker.internal:11434")
 
 # Models you've pulled with `ollama pull`. First one is the default for /ask.
 AVAILABLE_MODELS = [
+    "qwen3:8b",
     "qwen2.5:3b",
     "tinyllama:latest",
     "hf.co/HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive:Q4_K_M",
 ]
-DEFAULT_MODEL = os.environ.get("DEFAULT_MODEL", "qwen2.5:3b")
+# NOTE: only qwen3:8b was confirmed present via `ollama list` as of the last
+# check. If /model shows a 404 for any of the others, re-pull it on the host:
+#   ollama pull qwen2.5:3b
+#   ollama pull tinyllama
+DEFAULT_MODEL = os.environ.get("DEFAULT_MODEL", "qwen3:8b")
 
 # How long to wait for a model response before giving up (seconds).
 # Larger/uncensored models are slower - bump this up if you switch to one.

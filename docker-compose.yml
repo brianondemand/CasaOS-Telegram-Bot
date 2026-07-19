@@ -3,6 +3,7 @@ name: ryusuui
 services:
   casaos-bot:
     build: .
+    image: ryusuui-casaos-bot:latest
     container_name: casaos-bot
     restart: unless-stopped
 
@@ -30,7 +31,7 @@ services:
       - LOG_TAIL_LINES=${LOG_TAIL_LINES:-30}
       - USE_NSENTER=true
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
-      - DEFAULT_MODEL=${DEFAULT_MODEL:-qwen2.5:3b}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-qwen3:8b}
       - OLLAMA_TIMEOUT_SECONDS=${OLLAMA_TIMEOUT_SECONDS:-60}
       - MONITOR_ENABLED=${MONITOR_ENABLED:-true}
       - MONITOR_INTERVAL_SECONDS=${MONITOR_INTERVAL_SECONDS:-300}
@@ -40,3 +41,27 @@ services:
       - TEMP_ALERT_THRESHOLD_C=${TEMP_ALERT_THRESHOLD_C:-80}
       - BATTERY_ALERT_THRESHOLD=${BATTERY_ALERT_THRESHOLD:-20}
       - ALERT_COOLDOWN_SECONDS=${ALERT_COOLDOWN_SECONDS:-1800}
+
+    # Icon shown on the CasaOS dashboard tile. Swap this URL for your own
+    # hosted image any time - see README.md "Customizing the CasaOS tile".
+    labels:
+      icon: "https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/72x72/2693.png"
+
+    # CasaOS-specific metadata: controls the dashboard tile's title and icon.
+    # Without this block, CasaOS falls back to a flat default icon and shows
+    # the compose project/service name instead of a real title.
+    x-casaos:
+      architectures:
+        - amd64
+        - arm64
+      author: self
+      category: Utilities
+      icon: "https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/72x72/2693.png"
+      is_uncontrolled: false
+      store_app_id: ryusuui
+      title:
+        en_us: Ryusuui
+      description:
+        en_us: Telegram bot for monitoring and managing this CasaOS server.
+      tagline:
+        en_us: Server management & local AI, from Telegram

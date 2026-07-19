@@ -6,19 +6,20 @@ A Telegram bot for monitoring and managing a CasaOS server running on Ubuntu 24.
 
 ## Features
 
-| Command           | Description                                                                     |
-| ----------------- | ------------------------------------------------------------------------------- |
-| `/start`, `/help` | Show welcome message / command list                                             |
-| `/status`         | CPU, RAM, disk, temperature, battery (if present), load average, uptime         |
-| `/diskusage`      | Disk usage per mounted volume                                                   |
-| `/processes`      | Top 5 processes by CPU and by memory                                            |
-| `/network`        | Local + public IP, bandwidth counters                                           |
-| `/containers`     | List all Docker containers (CasaOS apps) with inline Start/Stop/Restart buttons |
-| `/ask <question>` | Ask your local Ollama model a question, right from Telegram                     |
-| `/model`          | Switch which Ollama model `/ask` uses                                           |
-| `/update`         | Run `apt-get update && apt-get upgrade -y` (with confirmation)                  |
-| `/reboot`         | Reboot the server (with confirmation)                                           |
-| `/shutdown`       | Shut down the server (with confirmation)                                        |
+| Command           | Description                                                                                           |
+| ----------------- | ----------------------------------------------------------------------------------------------------- |
+| `/start`, `/help` | Show welcome message / command list                                                                   |
+| `/status`         | CPU, RAM, disk, temperature, battery (if present), load average, uptime                               |
+| `/diskusage`      | Disk usage per mounted volume                                                                         |
+| `/processes`      | Top 5 processes by CPU and by memory                                                                  |
+| `/network`        | Local + public IP, bandwidth counters                                                                 |
+| `/containers`     | List all Docker containers (CasaOS apps) with inline Start/Stop/Restart buttons                       |
+| `/ask <question>` | Ask your local Ollama model a question, right from Telegram (remembers context within a conversation) |
+| `/model`          | Switch which Ollama model `/ask` uses                                                                 |
+| `/clear`          | Clear the AI conversation history and start fresh                                                     |
+| `/update`         | Run `apt-get update && apt-get upgrade -y` (with confirmation)                                        |
+| `/reboot`         | Reboot the server (with confirmation)                                                                 |
+| `/shutdown`       | Shut down the server (with confirmation)                                                              |
 
 The bot also **proactively messages you** (no command needed) if CPU, RAM, disk, temperature, or battery crosses a threshold, or if a container stops unexpectedly - see "Proactive monitoring" below.
 
@@ -185,17 +186,26 @@ journalctl -u casaos-bot -f
 
 The bot can talk to models you've already pulled with Ollama, directly from Telegram.
 
-- `/ask <question>` - sends your question to the currently selected model and replies with the answer.
-- `/model` - shows buttons to switch between your downloaded models (defaults to `qwen2.5:3b` for speed).
+- `/ask <question>` - sends your question to the currently selected model and replies with the answer. Remembers the last several exchanges in that chat, so you can ask follow-up questions naturally (e.g. "what about the second one?").
+- `/model` - shows buttons to switch between your downloaded models (defaults to `qwen2.5:3b` for speed). Switching models automatically clears history, since a new model can't make sense of another model's conversation.
+- `/clear` - wipes the conversation history for the current chat without switching models. Useful when you want to start a fresh topic.
 
 **Setup:**
 
 1. Make sure Ollama is running on your CasaOS host (not inside this bot's container) and has at least one model pulled (`ollama pull qwen2.5:3b`).
 2. If using Docker (Option A), `docker-compose.yml` already maps `host.docker.internal` to your real host via `extra_hosts`, so no changes are usually needed.
 3. If running directly on the host (Option B), set `OLLAMA_HOST=http://localhost:11434` instead.
-4. Add or remove models from the `AVAILABLE_MODELS` list in `config.py` to match what you've actually pulled (`ollama list` to check).
+4. Add or remove models from the `AVAILABLE_MODELS` list in `config.py` to match what you've actually pulled - run `ollama list` on the host and copy the exact `NAME` column (name and tag must match exactly, e.g. `qwen3:8b` not `qwen3`).
 
 **Note on the "Uncensored/Aggressive" model:** larger/uncensored models will be noticeably slower to respond. If you plan to use it regularly, increase `OLLAMA_TIMEOUT_SECONDS` in your `.env` so the bot doesn't give up waiting.
+
+**Troubleshooting a 404 from Ollama:** this means Ollama responded, but didn't recognize the model name. Run `ollama list` on the host and confirm the name in `config.py`'s `AVAILABLE_MODELS` matches character-for-character, including the tag after the colon. If you're still stuck, test directly from inside the container:
+
+```bash
+docker exec -it casaos-bot curl http://host.docker.internal:11434/api/tags
+```
+
+This should list your models in JSON. If it fails to connect at all, the issue is network reachability (check `OLLAMA_HOST` and the `extra_hosts` mapping), not the model name.
 
 ## Proactive monitoring & alerts
 
@@ -211,6 +221,32 @@ The bot checks system health every `MONITOR_INTERVAL_SECONDS` (default: 5 minute
 To avoid spam, each alert type has a cooldown (`ALERT_COOLDOWN_SECONDS`, default 30 minutes) - so a sustained high-CPU period notifies you once, not every 5 minutes.
 
 Tune all of this in your `.env` file, or set `MONITOR_ENABLED=false` to turn it off entirely.
+
+## Customizing the CasaOS tile
+
+The dashboard tile's title and icon come from the `x-casaos` block near the bottom of `docker-compose.yml`, not from the container name. It's currently set to:
+
+```yaml
+x-casaos:
+  icon: "https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/72x72/2693.png"
+  title:
+    en_us: Ryusuui
+```
+
+**To use your own icon:** replace the `icon:` URL (in both the `labels:` and `x-casaos:` sections - keep them matching) with a link to any square PNG/SVG you have hosted somewhere reachable (GitHub raw link, Imgur, your own file server, etc.). CasaOS just needs a working image URL - it doesn't have to be an emoji.
+
+**To change the title:** edit the `en_us:` value under `title:`.
+
+**Applying changes:** because this changes container metadata, do a full recreate rather than just `up -d`:
+
+```bash
+docker compose down
+docker compose up -d --build
+```
+
+Then refresh the CasaOS dashboard in your browser (a hard refresh / cache clear helps if the old icon still shows).
+
+If CasaOS's built-in editor (the pencil/settings icon on the tile) still shows blank required fields and won't let you save, that's expected - it's designed for its own App Store format, not for editing a hand-written compose file's build config directly. Editing `docker-compose.yml` and recreating the container (as above) is the reliable way to change metadata for this app.
 
 ## Security notes
 

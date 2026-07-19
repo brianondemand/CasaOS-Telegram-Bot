@@ -1,3 +1,5 @@
+name: ryusuui
+
 services:
   casaos-bot:
     build: .
